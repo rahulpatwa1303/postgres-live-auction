@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AuctionHouse — Live Bidding</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    * { font-family: 'Inter', sans-serif; box-sizing: border-box; }
+    body { background: #08090d; color: white; margin: 0; }
+    code, .mono { font-family: 'JetBrains Mono', monospace; }
+
+    .glass {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.07);
+      backdrop-filter: blur(20px);
+    }
+    .glass-hover:hover { background: rgba(255,255,255,0.055); }
+
+    .gold-gradient { background: linear-gradient(135deg, #fbbf24, #d97706); }
+    .gold-text {
+      background: linear-gradient(135deg, #fbbf24, #f59e0b);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* ── Live pulse dot ── */
+    .pulse-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 0 0 rgba(34,197,94,0.7);
+      animation: livePulse 2s infinite;
+    }
+    .pulse-dot.warn { background: #f59e0b; box-shadow: 0 0 0 0 rgba(245,158,11,0.7); animation: warnPulse 1s infinite; }
+    .pulse-dot.off  { background: #ef4444; box-shadow: none; animation: none; }
+
+    @keyframes livePulse {
+      0%  { box-shadow: 0 0 0 0   rgba(34,197,94,0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(34,197,94,0);   }
+      100%{ box-shadow: 0 0 0 0   rgba(34,197,94,0);   }
+    }
+    @keyframes warnPulse {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.4; }
+    }
+
+    /* ── Price counter animation ── */
+    @keyframes priceUp {
+      0%   { transform: translateY(6px) scale(0.95); opacity: 0;   color: #ffffff; }
+      40%  { transform: translateY(0)   scale(1.08); opacity: 1;   color: #ffffff; }
+      100% { transform: translateY(0)   scale(1);    opacity: 1;   color: #f59e0b; }
+    }
+    .price-up { animation: priceUp 0.45s cubic-bezier(0.22,1,0.36,1) forwards; }
+
+    /* ── Toasts ── */
+    @keyframes toastIn  { from { transform: translateX(110%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes toastOut { to   { transform: translateX(110%); opacity: 0; } }
+    .toast-enter { animation: toastIn  0.28s ease forwards; }
+    .toast-exit  { animation: toastOut 0.28s ease forwards; }
+
+    /* ── Feed items ── */
+    @keyframes feedIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+    .feed-item { animation: feedIn 0.22s ease; }
+
+    /* ── Modal ── */
+    @keyframes modalIn { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+    .modal-in { animation: modalIn 0.22s cubic-bezier(0.22,1,0.36,1); }
+
+    /* ── Cards ── */
+    .card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .card:hover:not(.inactive-card) { transform: translateY(-3px); box-shadow: 0 24px 60px rgba(245,158,11,0.08); }
+    .card.new-glow { animation: newGlow 3s ease forwards; }
+    @keyframes newGlow {
+      0%,20% { box-shadow: 0 0 0 2px rgba(245,158,11,0.7), 0 24px 60px rgba(245,158,11,0.15); }
+      100%   { box-shadow: none; }
+    }
+
+    /* ── Inputs ── */
+    .bid-input {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.09);
+      color: white;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .bid-input::placeholder { color: rgba(255,255,255,0.22); }
+    .bid-input:focus {
+      outline: none;
+      border-color: rgba(245,158,11,0.55);
+      box-shadow: 0 0 0 3px rgba(245,158,11,0.09);
+    }
+    select.bid-input option { background: #1e293b; }
+
+    /* ── Progress bar for timer ── */
+    .timer-bar {
+      height: 2px;
+      border-radius: 1px;
+      background: rgba(255,255,255,0.06);
+      overflow: hidden;
+    }
+    .timer-bar-fill {
+      height: 100%;
+      border-radius: 1px;
+      transition: width 1s linear, background 1s linear;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.07); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+
+    /* ── Empty state ── */
+    @keyframes emptyFloat {
+      0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); }
+    }
+    .empty-icon { animation: emptyFloat 3s ease infinite; }
+  </style>
+</head>
+<body>
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header id="app-header"
+    style="background:rgba(8,9,13,0.88);backdrop-filter:blur(24px);border-bottom:1px solid rgba(255,255,255,0.06);"
+    class="sticky top-0 z-40 px-6 py-3.5 flex items-center justify-between">
+
+    <div class="flex items-center gap-3">
+      <div class="gold-gradient w-9 h-9 rounded-xl flex items-center justify-center text-black font-black text-sm shadow-lg select-none">A</div>
+      <div>
+        <div class="font-bold text-white text-base leading-none tracking-tight">AuctionHouse</div>
+        <div class="text-xs text-slate-500 leading-none mt-0.5 hidden sm:block">Real-time · Powered by PostgreSQL</div>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <!-- Clock -->
+      <div class="hidden md:flex items-center gap-1.5 text-xs text-slate-600 mono">
+        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span id="clock">--:--:--</span>
+      </div>
+
+      <!-- Connection status -->
+      <div id="conn-badge" class="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-all"
+        style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.2);color:#4ade80;">
+        <div id="conn-dot" class="pulse-dot"></div>
+        <span id="conn-label">Live</span>
+      </div>
+
+      <!-- Add Item -->
+      <button onclick="openAddModal()"
+        class="gold-gradient text-black text-xs font-bold px-3.5 py-2 rounded-full hover:opacity-90 active:scale-95 transition-all flex items-center gap-1.5 shadow-lg">
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+        <span class="hidden sm:inline">Add Item</span>
+        <span class="sm:hidden">+</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ── Main layout ─────────────────────────────────────────────────────── -->
+  <div class="flex" style="height:calc(100vh - 61px);">
+
+    <!-- Auction grid -->
+    <main class="flex-1 overflow-y-auto p-5 lg:p-6">
+      <div class="mb-6 flex items-end justify-between">
+        <div>
+          <h1 class="text-lg font-bold text-white">Active Auctions</h1>
+          <p class="text-slate-600 text-xs mt-0.5">Bids broadcast via <code class="text-amber-500/70 text-xs">pg_notify</code> · Socket.io</p>
+        </div>
+        <div id="item-count" class="text-xs text-slate-700 mono"></div>
+      </div>
+
+      <div id="dashboard" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <!-- skeleton shown until init_items fires -->
+        <div class="col-span-full flex flex-col items-center justify-center py-24 text-slate-700">
+          <div class="empty-icon text-5xl mb-4">🔌</div>
+          <div class="text-sm font-medium">Connecting to auction server…</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Activity feed sidebar -->
+    <aside class="hidden lg:flex w-72 flex-shrink-0 flex-col"
+      style="background:rgba(255,255,255,0.02);border-left:1px solid rgba(255,255,255,0.05);">
+      <div class="px-4 py-3.5" style="border-bottom:1px solid rgba(255,255,255,0.05);">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-white">Live Activity</h2>
+          <div class="flex items-center gap-1.5 text-xs text-green-400">
+            <span class="w-1.5 h-1.5 bg-green-400 rounded-full inline-block animate-pulse"></span>
+            <span>Streaming</span>
+          </div>
+        </div>
+        <p class="text-xs text-slate-700 mt-0.5 mono">pg_notify → Socket.io</p>
+      </div>
+      <div id="activity-feed" class="flex-1 overflow-y-auto p-2.5 space-y-0.5">
+        <div id="feed-empty" class="text-center text-slate-700 text-xs mt-14 leading-relaxed select-none">
+          <div class="text-2xl mb-2">⚡</div>
+          Waiting for bids…
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ── Toasts ──────────────────────────────────────────────────────────── -->
+  <div id="toast-container" class="fixed bottom-5 right-5 flex flex-col gap-2 z-50 pointer-events-none" style="max-width:300px;"></div>
+
+  <!-- ── Add Item Modal ──────────────────────────────────────────────────── -->
+  <div id="add-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4"
+    style="background:rgba(0,0,0,0.78);backdrop-filter:blur(10px);">
+    <div class="modal-in glass rounded-3xl p-7 w-full max-w-md"
+      style="border-color:rgba(245,158,11,0.18);">
+      <div class="flex items-start justify-between mb-5">
+        <div>
+          <h2 class="text-base font-bold text-white">List New Item</h2>
+          <p class="text-xs text-slate-600 mt-0.5 mono">→ pg_notify NEW_ITEM → all browsers</p>
+        </div>
+        <button onclick="closeAddModal()"
+          class="w-7 h-7 rounded-full flex items-center justify-center text-slate-600 hover:text-white hover:bg-white/8 transition-all text-base mt-0.5">✕</button>
+      </div>
+
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-500 font-semibold uppercase tracking-wider">Item Name *</label>
+          <input id="f-name" type="text" placeholder="e.g. Vintage Rolex Submariner"
+            class="bid-input w-full px-3 py-2.5 rounded-xl text-sm mt-1"
+            onkeydown="if(event.key==='Enter') document.getElementById('f-desc').focus()" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 font-semibold uppercase tracking-wider">Description</label>
+          <textarea id="f-desc" placeholder="Brief description…"
+            class="bid-input w-full px-3 py-2.5 rounded-xl text-sm mt-1 resize-none" rows="2"></textarea>
+        </div>
+        <div>
+          <label class="text-xs text-slate-500 font-semibold uppercase tracking-wider">Image URL</label>
+          <input id="f-img" type="url" placeholder="https://images.unsplash.com/…"
+            class="bid-input w-full px-3 py-2.5 rounded-xl text-sm mt-1" />
+          <p class="text-xs text-slate-700 mt-1">Leave blank for default image</p>
+        </div>
+        <div class="flex gap-3">
+          <div class="flex-1">
+            <label class="text-xs text-slate-500 font-semibold uppercase tracking-wider">Starting Price ($) *</label>
+            <input id="f-price" type="number" min="0" step="any" placeholder="0"
+              class="bid-input w-full px-3 py-2.5 rounded-xl text-sm mt-1" />
+          </div>
+          <div class="flex-1">
+            <label class="text-xs text-slate-500 font-semibold uppercase tracking-wider">Duration</label>
+            <select id="f-duration" class="bid-input w-full px-3 py-2.5 rounded-xl text-sm mt-1 cursor-pointer">
+              <option value="5">5 minutes</option>
+              <option value="10" selected>10 minutes</option>
+              <option value="30">30 minutes</option>
+              <option value="60">1 hour</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex gap-3 mt-5">
+        <button onclick="closeAddModal()"
+          class="flex-1 py-2.5 rounded-xl text-sm font-medium text-slate-500 hover:text-white transition-colors"
+          style="border:1px solid rgba(255,255,255,0.07);">Cancel</button>
+        <button onclick="submitAddItem()"
+          class="flex-1 gold-gradient text-black font-bold py-2.5 rounded-xl text-sm hover:opacity-90 active:scale-95 transition-all shadow-lg">
+          List Item →
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Winner Modal ────────────────────────────────────────────────────── -->
+  <div id="winner-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4"
+    style="background:rgba(0,0,0,0.8);backdrop-filter:blur(10px);">
+    <div class="modal-in glass rounded-3xl p-10 text-center w-full max-w-sm"
+      style="border-color:rgba(245,158,11,0.22);">
+      <div class="text-5xl mb-4">🔨</div>
+      <div class="text-amber-400 font-bold text-xs uppercase tracking-widest mb-3">Auction Closed</div>
+      <p id="winner-item"   class="text-xl font-black text-white mb-1.5"></p>
+      <p id="winner-price"  class="text-4xl font-black gold-text mb-1"></p>
+      <p id="winner-bidder" class="text-slate-500 text-xs mb-8"></p>
+      <button onclick="closeModal()"
+        class="gold-gradient text-black font-bold px-8 py-3 rounded-full text-sm hover:opacity-90 active:scale-95 transition-all">
+        Continue Bidding
+      </button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    let itemsData = [];
+    let feedCount  = 0;
+    const AVATAR_COLORS = ['#f59e0b','#3b82f6','#8b5cf6','#ec4899','#10b981','#06b6d4','#f97316'];
+    const DEFAULT_IMG   = 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&q=80&w=800';
+
+    // ── Clock ──────────────────────────────────────────────────────────────
+    setInterval(() => {
+      document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+    }, 1000);
+
+    // ── Connection state ───────────────────────────────────────────────────
+    socket.on('connect', () => setConnState('live'));
+    socket.on('disconnect', () => setConnState('off'));
+    socket.on('reconnecting', () => setConnState('warn'));
+    socket.on('reconnect', () => setConnState('live'));
+
+    function setConnState(state) {
+      const dot   = document.getElementById('conn-dot');
+      const label = document.getElementById('conn-label');
+      const badge = document.getElementById('conn-badge');
+      dot.className = `pulse-dot ${state === 'live' ? '' : state}`;
+      if (state === 'live') {
+        badge.style.cssText = 'background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.2);color:#4ade80;';
+        label.textContent = 'Live';
+      } else if (state === 'warn') {
+        badge.style.cssText = 'background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);color:#fbbf24;';
+        label.textContent = 'Reconnecting…';
+      } else {
+        badge.style.cssText = 'background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:#f87171;';
+        label.textContent = 'Offline';
+      }
+    }
+
+    // ── Init ───────────────────────────────────────────────────────────────
+    socket.on('init_items', (items) => {
+      itemsData = items;
+      renderDashboard();
+    });
+
+    function renderDashboard() {
+      const container = document.getElementById('dashboard');
+      if (itemsData.length === 0) {
+        container.innerHTML = `
+          <div class="col-span-full flex flex-col items-center justify-center py-24 text-slate-700">
+            <div class="empty-icon text-5xl mb-4">🏷️</div>
+            <div class="text-sm font-medium mb-1">No auctions yet</div>
+            <div class="text-xs">Click <span class="text-amber-500">+ Add Item</span> to list the first one</div>
+          </div>`;
+      } else {
+        container.innerHTML = itemsData.map(renderCard).join('');
+      }
+      updateCount();
+      startTimers();
+    }
+
+    function renderCard(item) {
+      const inactive = item.status !== 'active';
+      const price    = fmtPrice(item.current_price);
+      const bids     = parseInt(item.bid_count) || 0;
+      const imgSrc   = item.image_url || DEFAULT_IMG;
+
+      return `
+        <div id="item-${item.id}" class="card glass rounded-2xl overflow-hidden flex flex-col${inactive ? ' inactive-card opacity-55' : ''}">
+
+          <!-- Image -->
+          <div class="relative">
+            <img src="${escHtml(imgSrc)}" alt="${escHtml(item.name)}"
+              class="w-full object-cover select-none" style="height:176px;"
+              onerror="this.src='${DEFAULT_IMG}'" />
+            <div class="absolute inset-0" style="background:linear-gradient(to top,rgba(8,9,13,0.65) 0%,transparent 55%);"></div>
+
+            <!-- Status badge -->
+            <div class="absolute top-3 left-3">
+              ${item.status === 'discontinued'
+                ? badge('Discontinued', 'rgba(239,68,68,0.2)', 'rgba(239,68,68,0.3)', '#f87171')
+                : item.status === 'closed'
+                ? badge('Ended', 'rgba(100,116,139,0.25)', 'rgba(100,116,139,0.3)', '#94a3b8')
+                : `<span class="text-xs font-semibold px-2.5 py-1 rounded-full flex items-center gap-1.5"
+                     style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);color:#4ade80;">
+                     <span class="w-1.5 h-1.5 bg-green-400 rounded-full inline-block animate-pulse"></span>Live
+                   </span>`
+              }
+            </div>
+
+            <!-- Bid count badge -->
+            <div class="absolute top-3 right-3 flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full"
+              style="background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.1);color:rgba(255,255,255,0.7);">
+              <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"/></svg>
+              <span id="bids-${item.id}">${bids}</span>
+            </div>
+
+            <!-- Discontinue button (active only) — shown on hover via parent -->
+            ${!inactive ? `
+            <button onclick="discontinueItem(event,${item.id},'${escHtmlAttr(item.name)}')"
+              title="End auction early"
+              class="absolute bottom-3 right-3 opacity-0 hover-show w-7 h-7 rounded-full flex items-center justify-center text-xs transition-all hover:scale-110"
+              style="background:rgba(239,68,68,0.25);border:1px solid rgba(239,68,68,0.4);color:#f87171;">✕
+            </button>` : ''}
+          </div>
+
+          <!-- Body -->
+          <div class="p-4 flex flex-col flex-1">
+            <h2 class="font-bold text-white text-sm leading-tight mb-1">${escHtml(item.name)}</h2>
+            <p class="text-slate-600 text-xs leading-relaxed mb-4 line-clamp-2">${escHtml(item.description)}</p>
+
+            <!-- Price + Timer row -->
+            <div class="flex justify-between items-end mb-1">
+              <div>
+                <div class="text-xs text-slate-700 uppercase tracking-wider mb-0.5">Current Bid</div>
+                <div id="price-${item.id}" class="text-2xl font-black text-amber-400 mono">$${price}</div>
+                <div id="leader-${item.id}" class="text-xs text-slate-700 mt-0.5 truncate" style="max-width:130px;">
+                  ${item.last_bidder ? `↑ ${escHtml(item.last_bidder)}` : 'No bids yet'}
+                </div>
+              </div>
+              <div class="text-right">
+                <div class="text-xs text-slate-700 uppercase tracking-wider mb-0.5">Ends In</div>
+                <div id="timer-${item.id}" class="text-base font-bold mono ${inactive ? 'text-slate-600' : 'text-slate-300'}">
+                  ${inactive ? (item.status === 'discontinued' ? 'Stopped' : 'Ended') : '--:--'}
+                </div>
+              </div>
+            </div>
+
+            <!-- Timer progress bar -->
+            <div class="timer-bar mb-4">
+              <div id="bar-${item.id}" class="timer-bar-fill" style="width:${inactive ? '0' : '100'}%;background:#3b82f6;"></div>
+            </div>
+
+            <!-- Bid form / ended state -->
+            ${inactive ? `
+              <div class="text-center py-2.5 rounded-xl text-slate-700 text-xs font-medium mt-auto"
+                style="border:1px solid rgba(255,255,255,0.04);">
+                ${item.status === 'discontinued' ? 'Auction discontinued' : 'Auction ended'}
+              </div>
+            ` : `
+              <div class="space-y-2 mt-auto">
+                <input type="text" id="name-${item.id}" placeholder="Your name"
+                  class="bid-input w-full px-3 py-2 rounded-xl text-sm" />
+                <div class="flex gap-2">
+                  <input type="number" id="amt-${item.id}" placeholder="Bid amount" min="0" step="any"
+                    class="bid-input flex-1 px-3 py-2 rounded-xl text-sm mono"
+                    onkeydown="if(event.key==='Enter') bid(${item.id})" />
+                  <button onclick="bid(${item.id})"
+                    class="gold-gradient text-black font-bold px-4 py-2 rounded-xl text-sm hover:opacity-90 active:scale-95 transition-all whitespace-nowrap shadow-lg">
+                    Bid →
+                  </button>
+                </div>
+              </div>
+            `}
+          </div>
+        </div>`;
+    }
+
+    function badge(text, bg, border, color) {
+      return `<span class="text-xs font-semibold px-2.5 py-1 rounded-full"
+        style="background:${bg};border:1px solid ${border};color:${color};">${text}</span>`;
+    }
+
+    // ── Timers + progress bar ──────────────────────────────────────────────
+    let timerBarInit = {}; // item_id → { total, starts_at }
+
+    function startTimers() {
+      itemsData.forEach(item => {
+        if (item.status === 'active' && item.ends_at) {
+          timerBarInit[item.id] = {
+            endsAt:   new Date(item.ends_at).getTime(),
+            totalMs:  new Date(item.ends_at).getTime() - Date.now(),
+          };
+        }
+      });
+
+      setInterval(() => {
+        itemsData.forEach(item => {
+          if (item.status !== 'active') return;
+          const timerEl = document.getElementById(`timer-${item.id}`);
+          const barEl   = document.getElementById(`bar-${item.id}`);
+          if (!timerEl) return;
+
+          const remaining = timerBarInit[item.id]
+            ? timerBarInit[item.id].endsAt - Date.now()
+            : new Date(item.ends_at) - Date.now();
+
+          if (remaining <= 0) {
+            timerEl.textContent = 'Ended';
+            timerEl.style.color = '#475569';
+            if (barEl) { barEl.style.width = '0%'; barEl.style.background = '#475569'; }
+            return;
+          }
+
+          // Timer text
+          const mins = Math.floor(remaining / 60000);
+          const secs = Math.floor((remaining % 60000) / 1000);
+          timerEl.textContent = `${mins}:${secs.toString().padStart(2,'0')}`;
+
+          // Urgency color
+          if (remaining < 30000) {
+            timerEl.style.color = '#f87171';
+            timerEl.style.fontWeight = '800';
+          } else if (remaining < 120000) {
+            timerEl.style.color = '#fbbf24';
+            timerEl.style.fontWeight = '700';
+          } else {
+            timerEl.style.color = '#cbd5e1';
+            timerEl.style.fontWeight = '700';
+          }
+
+          // Progress bar
+          if (barEl && timerBarInit[item.id]) {
+            const pct = Math.max(0, Math.min(100, (remaining / timerBarInit[item.id].totalMs) * 100));
+            barEl.style.width = pct + '%';
+            barEl.style.background = remaining < 30000 ? '#ef4444'
+              : remaining < 120000 ? '#f59e0b' : '#3b82f6';
+          }
+        });
+      }, 1000);
+    }
+
+    // ── Place Bid ─────────────────────────────────────────────────────────
+    function bid(id) {
+      const amount = parseFloat(document.getElementById(`amt-${id}`).value);
+      const name   = document.getElementById(`name-${id}`).value.trim() || 'Anonymous';
+      const item   = itemsData.find(i => i.id === id);
+      if (!amount || isNaN(amount))    { showToast('Enter a valid amount', 'error'); return; }
+      if (amount <= Number(item?.current_price || 0)) {
+        showToast(`Must exceed $${fmtPrice(item?.current_price)}`, 'error'); return;
+      }
+      socket.emit('place_bid', { item_id: id, name, amount });
+      document.getElementById(`amt-${id}`).value = '';
+    }
+
+    // ── Real-time updates ─────────────────────────────────────────────────
+    socket.on('update', (data) => {
+
+      if (data.type === 'NEW_BID') {
+        const item = itemsData.find(i => i.id === data.item_id);
+        const oldPrice = Number(item?.current_price || 0);
+        if (item) { item.current_price = data.new_price; item.last_bidder = data.bidder; item.bid_count = (parseInt(item.bid_count)||0) + 1; }
+
+        const priceEl  = document.getElementById(`price-${data.item_id}`);
+        const leaderEl = document.getElementById(`leader-${data.item_id}`);
+        const bidsEl   = document.getElementById(`bids-${data.item_id}`);
+        if (priceEl) {
+          priceEl.classList.remove('price-up');
+          void priceEl.offsetWidth;
+          priceEl.classList.add('price-up');
+          animatePrice(priceEl, oldPrice, data.new_price);
+        }
+        if (leaderEl) leaderEl.textContent = `↑ ${data.bidder}`;
+        if (bidsEl)   bidsEl.textContent   = parseInt(item?.bid_count) || '';
+
+        addFeedItem({ type: 'bid', bidder: data.bidder, amount: data.new_price, item: item?.name || '' });
+        showToast(`${data.bidder} bid $${fmtPrice(data.new_price)} on ${item?.name || 'item'}`, 'bid');
+      }
+
+      if (data.type === 'AUCTION_CLOSED') {
+        const item = itemsData.find(i => i.id === data.item_id);
+        if (item) item.status = 'closed';
+        markCardInactive(data.item_id);
+
+        document.getElementById('winner-item').textContent   = data.name;
+        document.getElementById('winner-price').textContent  = `$${fmtPrice(data.price)}`;
+        document.getElementById('winner-bidder').textContent = item?.last_bidder ? `Won by ${item.last_bidder}` : '';
+        document.getElementById('winner-modal').classList.remove('hidden');
+        confetti({ particleCount: 220, spread: 80, origin: { y: 0.6 }, colors: ['#f59e0b','#fbbf24','#d97706','#fff'] });
+        addFeedItem({ type: 'sold', item: data.name, amount: data.price });
+      }
+
+      if (data.type === 'NEW_ITEM') {
+        const item = { ...data.item, last_bidder: null, bid_count: 0 };
+        timerBarInit[item.id] = {
+          endsAt:  new Date(item.ends_at).getTime(),
+          totalMs: new Date(item.ends_at).getTime() - Date.now(),
+        };
+        itemsData.push(item);
+        const container = document.getElementById('dashboard');
+        // Remove empty state if present
+        const empty = container.querySelector('.empty-icon');
+        if (empty) container.innerHTML = '';
+
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = renderCard(item);
+        const card = wrapper.firstElementChild;
+        card.classList.add('new-glow');
+        container.appendChild(card);
+        updateCount();
+        addFeedItem({ type: 'new_item', item: item.name, amount: item.current_price });
+        showToast(`New listing: ${item.name}`, 'new');
+      }
+
+      if (data.type === 'AUCTION_DISCONTINUED') {
+        const item = itemsData.find(i => i.id === data.item_id);
+        if (item) item.status = 'discontinued';
+        // Re-render the card
+        const card = document.getElementById(`item-${data.item_id}`);
+        if (card && item) {
+          const wrapper = document.createElement('div');
+          wrapper.innerHTML = renderCard(item);
+          card.replaceWith(wrapper.firstElementChild);
+        }
+        updateCount();
+        addFeedItem({ type: 'discontinued', item: data.name });
+        showToast(`"${data.name}" discontinued`, 'error');
+      }
+    });
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+    function markCardInactive(id) {
+      const card = document.getElementById(`item-${id}`);
+      if (card) { card.classList.add('inactive-card','opacity-55'); card.classList.remove('card'); }
+    }
+
+    function updateCount() {
+      const active = itemsData.filter(i => i.status === 'active').length;
+      const total  = itemsData.length;
+      document.getElementById('item-count').textContent =
+        `${active} active · ${total - active} ended`;
+    }
+
+    function fmtPrice(n) {
+      return Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    }
+
+    function animatePrice(el, from, to) {
+      const duration = 380;
+      const start    = Date.now();
+      const step = () => {
+        const t = Math.min((Date.now() - start) / duration, 1);
+        const ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
+        el.textContent = `$${fmtPrice(from + (to - from) * ease)}`;
+        if (t < 1) requestAnimationFrame(step);
+        else el.textContent = `$${fmtPrice(to)}`;
+      };
+      requestAnimationFrame(step);
+    }
+
+    // ── Activity Feed ─────────────────────────────────────────────────────
+    function addFeedItem({ type, bidder, amount, item }) {
+      const feed = document.getElementById('activity-feed');
+      document.getElementById('feed-empty')?.remove();
+      feedCount++;
+
+      const el = document.createElement('div');
+      el.className = 'feed-item flex items-start gap-2.5 p-2.5 rounded-xl glass-hover transition-colors cursor-default';
+
+      if (type === 'bid') {
+        const initial = (bidder || 'A')[0].toUpperCase();
+        const color   = AVATAR_COLORS[initial.charCodeAt(0) % AVATAR_COLORS.length];
+        el.innerHTML = `
+          <div class="w-7 h-7 rounded-full flex items-center justify-center text-black text-xs font-bold flex-shrink-0" style="background:${color}">${initial}</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-xs font-semibold text-white leading-tight truncate">${escHtml(bidder)}</div>
+            <div class="text-xs text-slate-600 leading-tight">bid <span class="text-amber-400 font-semibold mono">$${fmtPrice(amount)}</span> · <span class="text-slate-500 truncate">${escHtml(item)}</span></div>
+          </div>
+          <div class="text-xs text-slate-700 flex-shrink-0 mt-0.5">now</div>`;
+      } else if (type === 'sold') {
+        el.innerHTML = `
+          <div class="w-7 h-7 rounded-full flex items-center justify-center text-sm flex-shrink-0" style="background:rgba(245,158,11,0.15)">🔨</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-xs font-semibold text-amber-400 leading-tight">SOLD</div>
+            <div class="text-xs text-slate-600 leading-tight"><span class="text-slate-300 truncate">${escHtml(item)}</span> · <span class="text-white font-semibold mono">$${fmtPrice(amount)}</span></div>
+          </div>
+          <div class="text-xs text-slate-700 flex-shrink-0 mt-0.5">now</div>`;
+      } else if (type === 'new_item') {
+        el.innerHTML = `
+          <div class="w-7 h-7 rounded-full flex items-center justify-center text-sm flex-shrink-0" style="background:rgba(245,158,11,0.18);border:1px solid rgba(245,158,11,0.3)">✦</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-xs font-semibold text-amber-300 leading-tight">NEW LISTING</div>
+            <div class="text-xs text-slate-600 leading-tight"><span class="text-slate-300 truncate">${escHtml(item)}</span> · starts <span class="text-white font-semibold mono">$${fmtPrice(amount)}</span></div>
+          </div>
+          <div class="text-xs text-slate-700 flex-shrink-0 mt-0.5">now</div>`;
+      } else if (type === 'discontinued') {
+        el.innerHTML = `
+          <div class="w-7 h-7 rounded-full flex items-center justify-center text-sm flex-shrink-0" style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.25)">✕</div>
+          <div class="flex-1 min-w-0">
+            <div class="text-xs font-semibold text-red-400 leading-tight">DISCONTINUED</div>
+            <div class="text-xs text-slate-600 leading-tight truncate">${escHtml(item)}</div>
+          </div>
+          <div class="text-xs text-slate-700 flex-shrink-0 mt-0.5">now</div>`;
+      }
+
+      feed.insertBefore(el, feed.firstChild);
+      while (feed.children.length > 40) feed.removeChild(feed.lastChild);
+    }
+
+    // ── Toasts ────────────────────────────────────────────────────────────
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toast-container');
+      const styles = {
+        bid:   'background:rgba(180,83,9,0.92);',
+        error: 'background:rgba(185,28,28,0.92);',
+        new:   'background:rgba(5,150,105,0.92);',
+        info:  'background:rgba(15,23,42,0.96);border:1px solid rgba(255,255,255,0.09);',
+      };
+      const icons = { bid:'💰', error:'⚠️', new:'✦', info:'ℹ️' };
+      const toast = document.createElement('div');
+      toast.className = 'toast-enter pointer-events-auto flex items-center gap-2.5 px-4 py-2.5 rounded-xl text-sm text-white shadow-2xl';
+      toast.style.cssText = styles[type] || styles.info;
+      toast.innerHTML = `<span class="flex-shrink-0">${icons[type]||icons.info}</span><span class="leading-tight">${escHtml(message)}</span>`;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.classList.replace('toast-enter','toast-exit');
+        setTimeout(() => toast.remove(), 300);
+      }, 3200);
+    }
+
+    // ── Modals ────────────────────────────────────────────────────────────
+    function closeModal() {
+      document.getElementById('winner-modal').classList.add('hidden');
+    }
+    function openAddModal() {
+      document.getElementById('add-modal').classList.remove('hidden');
+      setTimeout(() => document.getElementById('f-name').focus(), 50);
+    }
+    function closeAddModal() {
+      document.getElementById('add-modal').classList.add('hidden');
+      ['f-name','f-desc','f-img','f-price'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+      document.getElementById('f-duration').value = '10';
+    }
+    function submitAddItem() {
+      const name  = document.getElementById('f-name').value.trim();
+      const price = parseFloat(document.getElementById('f-price').value);
+      if (!name)        { showToast('Item name is required', 'error'); return; }
+      if (isNaN(price)) { showToast('Starting price is required', 'error'); return; }
+      socket.emit('add_item', {
+        name,
+        description:    document.getElementById('f-desc').value.trim(),
+        image_url:      document.getElementById('f-img').value.trim() || DEFAULT_IMG,
+        starting_price: price,
+        duration:       document.getElementById('f-duration').value,
+      });
+      closeAddModal();
+      showToast('Listed — notifying all bidders…', 'info');
+    }
+
+    // ── Discontinue ───────────────────────────────────────────────────────
+    function discontinueItem(e, id, name) {
+      e.stopPropagation();
+      if (!confirm(`End "${name}" early?\n\nThis will close the auction with no winner.`)) return;
+      socket.emit('discontinue_item', { item_id: id });
+    }
+
+    // Close modals on backdrop click
+    ['add-modal','winner-modal'].forEach(id => {
+      document.getElementById(id).addEventListener('click', (e) => {
+        if (e.target === document.getElementById(id)) {
+          document.getElementById(id).classList.add('hidden');
+          if (id === 'add-modal') closeAddModal();
+        }
+      });
+    });
+
+    // Close Add modal on Escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAddModal();
+    });
+
+    // ── Sanitization ──────────────────────────────────────────────────────
+    function escHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+    function escHtmlAttr(str) {
+      return String(str).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    }
+  </script>
+
+  <!-- Show discontinue button on card hover (CSS-only can't target #id buttons easily, use inline style trick) -->
+  <style>
+    .card:hover .hover-show { opacity: 1 !important; }
+  </style>
+</body>
+</html>
