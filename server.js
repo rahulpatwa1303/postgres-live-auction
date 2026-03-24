@@ -1,13 +1,19 @@
 require('dotenv').config();
 
 const express = require('express');
-const { Client } = require('pg');
+const { Client, Pool } = require('pg');
 const http = require('http');
 const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+
+// ── Query pool (shared connections for normal queries) ────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+});
 
 // ── Postgres connection ──────────────────────────────────────────────────────
 // Use a dedicated client for LISTEN — it must stay alive for the lifetime
@@ -69,7 +75,7 @@ connectDB();
 // In production you'd replace this with a pg_cron job.
 setInterval(async () => {
   try {
-    const res = await pgClient.query(
+    const res = await pool.query(
       "UPDATE items SET status = 'closed' WHERE ends_at <= NOW() AND status = 'active' RETURNING *"
     );
     res.rows.forEach(item => {
@@ -89,7 +95,7 @@ setInterval(async () => {
 // ── Socket handlers ──────────────────────────────────────────────────────────
 io.on('connection', async (socket) => {
   try {
-    const res = await pgClient.query(`
+    const res = await pool.query(`
       SELECT i.*,
         (SELECT bidder_name FROM bids WHERE item_id = i.id ORDER BY created_at DESC LIMIT 1) AS last_bidder,
         (SELECT COUNT(*) FROM bids WHERE item_id = i.id) AS bid_count
@@ -103,18 +109,24 @@ io.on('connection', async (socket) => {
   // Place a bid
   socket.on('place_bid', async (bid) => {
     try {
-      const item = await pgClient.query(
+      const item = await pool.query(
         'SELECT status, current_price FROM items WHERE id = $1', [bid.item_id]
       );
       if (item.rows[0]?.status === 'active' && bid.amount > item.rows[0].current_price) {
-        await pgClient.query(
+        await pool.query(
           'INSERT INTO bids (item_id, bidder_name, amount) VALUES ($1, $2, $3)',
           [bid.item_id, bid.name, bid.amount]
         );
         // → trigger fires pg_notify NEW_BID → fan-out via notification handler
+      } else {
+        socket.emit('bid_rejected', {
+          item_id: bid.item_id,
+          reason: item.rows[0]?.status !== 'active' ? 'Auction has ended' : 'Bid must exceed current price',
+        });
       }
     } catch (err) {
       console.error('place_bid error:', err.message);
+      socket.emit('bid_rejected', { item_id: bid.item_id, reason: 'Server error, please try again' });
     }
   });
 
@@ -122,7 +134,7 @@ io.on('connection', async (socket) => {
   socket.on('add_item', async (item) => {
     try {
       const duration = Math.max(1, Math.min(1440, parseInt(item.duration) || 10));
-      await pgClient.query(
+      await pool.query(
         `INSERT INTO items (name, description, image_url, current_price, ends_at)
          VALUES ($1, $2, $3, $4, NOW() + ($5 || ' minutes')::interval)`,
         [
@@ -143,7 +155,7 @@ io.on('connection', async (socket) => {
   // Discontinue an active auction (ends with no winner)
   socket.on('discontinue_item', async ({ item_id }) => {
     try {
-      await pgClient.query(
+      await pool.query(
         "UPDATE items SET status = 'discontinued' WHERE id = $1 AND status = 'active'",
         [item_id]
       );

@@ -515,6 +515,11 @@
       document.getElementById(`amt-${id}`).value = '';
     }
 
+    // ── Bid rejection feedback ────────────────────────────────────────────
+    socket.on('bid_rejected', ({ reason }) => {
+      showToast(reason || 'Bid rejected', 'error');
+    });
+
     // ── Real-time updates ─────────────────────────────────────────────────
     socket.on('update', (data) => {
 
